@@ -34,8 +34,12 @@
 
 #define SAMPLES         64    // Must be a power of 2
 #define xres            32    // Total number of  columns in the display, must be <= SAMPLES/2
-#define MIN_MILLS       10
-#define MIN_MILLSW      10
+
+#define MIN_MILLS_ON    10
+#define MIN_MILLSW_ON   20
+
+#define MIN_MILLS_OFF   10
+#define MIN_MILLSW_OFF  20
 
 #define N_LEDS          5
 
@@ -75,8 +79,10 @@ double v;
 uint32_t s = -1, e = -1;
 float freq = 0.;
 
-uint32_t smills[N_LEDS] = {0, 0, 0, 0, 0};
-uint32_t emills[N_LEDS] = {0, 0, 0, 0, 0};
+uint32_t smills[N_LEDS] = {0, 0, 0, 0, 0}, emills[N_LEDS] = {0, 0, 0, 0};
+uint8_t status_led[N_LEDS] = {LOW, LOW, LOW, LOW, LOW};
+uint8_t queue_led[N_LEDS] = {0, 0, 0, 0, 0};
+//uint32_t emills[N_LEDS] = {0, 0, 0, 0, 0};
 
 uint8_t leds[N_LEDS] = {LEDW, LEDR, LEDG, LEDB, LEDY};
 
@@ -120,6 +126,110 @@ void i2cScanner() {
     Serial.println(F("done"));
 }
 
+uint8_t addQueue(uint8_t id) {
+  printf("ADD: %d\n", id);
+  uint8_t tmp[N_LEDS] = {0, 0, 0, 0, 0};
+  uint8_t len = 0, r = 0;
+  for (uint8_t i = 0; i < N_LEDS; i++) {
+    if(queue_led[i] <= 0) {
+      len = (i);
+      break;
+    }
+  }
+  bool f = false;
+  uint8_t k = 0;
+  for (uint8_t i = 0; i < N_LEDS; i++) {
+    if(queue_led[i] == id) {
+      f = true;
+      break;
+    }
+  }
+  if (len >= 2 && !f) {
+    r = queue_led[0];
+    k = 1;
+  }
+  for (uint8_t i = 0; i < N_LEDS; i++) {
+    if(queue_led[k] == id) ++k;
+    if(k >= N_LEDS) break;
+    if(queue_led[k] <= 0) {
+      tmp[i] = id;
+      break;
+    }
+    tmp[i] = queue_led[k];
+    ++k;
+  }
+  for (uint8_t i = 0; i < N_LEDS; i++) queue_led[i] = tmp[i];
+  return (r);
+}
+
+#define LED_ON(d, _m) {\ 
+  status_led[d] = HIGH;\
+  digitalWrite(leds[d], HIGH);\ 
+  smills[d] = _m;\ 
+  emills[d] = 0;\ 
+}
+
+#define LED_OFF(d, _m) {\ 
+  status_led[d] = LOW;\
+  digitalWrite(leds[d], LOW);\ 
+  emills[d] = _m;\ 
+  smills[d] = 0;\ 
+}
+
+void ledON() {
+  uint32_t _m = millis();
+  if (v >= 25) {
+    uint8_t d = (uint8_t)(((uint16_t)((x) / 200.)) % N_LEDS);
+//    uint8_t res = addQueue(leds[d]);
+//    if(res > 0) digitalWrite(res, LOW);
+
+//    Serial.print("d: "); Serial.println(d);
+//    Serial.print("emills[d]: "); Serial.println(emills[d]);
+//    Serial.print("(_m - emills[d]): "); Serial.println((_m - emills[d]));
+//    Serial.println();
+    if((_m - emills[d]) < MIN_MILLS_OFF) return;
+
+    for (int i = 0; i < N_LEDS; i++) {
+      if (i != PLW && i != d && ((_m - smills[i]) >= MIN_MILLS_ON))
+        LED_OFF(i, _m)
+      else if(i == PLW && i != d && ((_m - smills[i]) >= MIN_MILLSW_ON))
+        LED_OFF(i, _m)
+    }
+
+    uint8_t ons = 0;
+    for (uint8_t j = 0; j < N_LEDS; j++) {
+      if(status_led[j] == HIGH) ++ons;
+    }
+    if(ons > 2) {
+      Serial.print("CUT DOWN: "); Serial.println(ons);
+      uint32_t oldest = 0xFFFFFFFF;
+      uint8_t oldest_id = 0xFFFFFFFF;
+      for (uint8_t j = 0; j < N_LEDS; j++) {
+        if(status_led[j] == HIGH && smills[j] != 0) {
+          if(oldest > smills[j]) {
+            oldest = smills[j];
+            oldest_id = j;
+          }
+        }
+      }
+      uint32_t _m = millis();
+      LED_OFF(oldest_id, _m)
+    }
+
+//    Serial.print("ons: "); Serial.println(ons);
+
+    LED_ON(d, _m);
+    
+    smills[d] = _m;
+    //Serial.println();
+  } else {
+    for (int i = 0; i < N_LEDS; i++) {
+      if (i != PLW && ((_m - smills[i]) >= MIN_MILLS_ON)) digitalWrite(leds[i], LOW);
+      else if(i == PLW && ((_m - smills[i]) >= MIN_MILLSW_ON)) digitalWrite(leds[i], LOW);
+    }
+  }
+}
+
 void setup() {
   pinMode(LEDW, OUTPUT);
   digitalWrite(LEDW, LOW);
@@ -142,11 +252,11 @@ void setup() {
 
   delay(1);
 
-  digitalWrite(LEDR, HIGH);
-  digitalWrite(LEDG, HIGH);
-  digitalWrite(LEDW, HIGH);
-  digitalWrite(LEDY, HIGH);
-  digitalWrite(LEDB, HIGH);
+//  digitalWrite(LEDR, HIGH);
+//  digitalWrite(LEDG, HIGH);
+//  digitalWrite(LEDW, HIGH);
+//  digitalWrite(LEDY, HIGH);
+//  digitalWrite(LEDB, HIGH);
   digitalWrite(LED_BUILTIN, HIGH);
 
   delay(500);
@@ -155,6 +265,32 @@ void setup() {
   digitalWrite(LEDW, LOW);
   digitalWrite(LEDY, LOW);
   digitalWrite(LEDB, LOW);
+
+  for (int i = 0; i < N_LEDS; i++) {
+    for (int j = 0; j < N_LEDS; j++) digitalWrite(leds[j], LOW);
+    digitalWrite(leds[i], HIGH);
+    delay(500);
+  }
+
+  for (int j = 0; j < N_LEDS; j++) digitalWrite(leds[j], LOW);
+  digitalWrite(LEDW, HIGH);
+  delay(500);
+
+    for (int j = 0; j < N_LEDS; j++) digitalWrite(leds[j], LOW);
+  digitalWrite(LEDG, HIGH);
+  digitalWrite(LEDY, HIGH);
+  delay(500);
+
+    for (int j = 0; j < N_LEDS; j++) digitalWrite(leds[j], LOW);
+  digitalWrite(LEDR, HIGH);
+  digitalWrite(LEDB, HIGH);
+  delay(500);
+
+  digitalWrite(LEDW, LOW);
+  digitalWrite(LEDR, LOW);
+  digitalWrite(LEDG, LOW);
+  digitalWrite(LEDB, LOW);
+  digitalWrite(LEDY, LOW);
 
   Wire.begin();
   Serial.begin(115200);
@@ -352,23 +488,9 @@ void loop() {
   float bass8 = vReal[8];
   float bass9 = vReal[9];
 
-  Serial.print(">>>x: "); Serial.print(x); Serial.print(" v: "); Serial.println(v);
+  //Serial.print(">>>x: "); Serial.print(x); Serial.print(" v: "); Serial.println(v);
 
-  if (v >= 25) {
-    int d = ((int)((x) / 200.)) % N_LEDS;
-    digitalWrite(leds[d], HIGH);
-    smills[d] = millis();
-    for (int i = 0; i < N_LEDS; i++) {
-      if (i != PLW && i != d && ((emills[i] - smills[i]) >= MIN_MILLS)) digitalWrite(leds[i], LOW);
-      else if(i == PLW && i != d && ((emills[i] - smills[i]) >= MIN_MILLSW)) digitalWrite(leds[i], LOW);
-    }
-    //Serial.println();
-  } else {
-    for (int i = 0; i < N_LEDS; i++) {
-      if (i != PLW && ((emills[i] - smills[i]) >= MIN_MILLS)) digitalWrite(leds[i], LOW);
-      else if(i == PLW && ((emills[i] - smills[i]) >= MIN_MILLSW)) digitalWrite(leds[i], LOW);
-    }
-  }
+  ledON();
 
   if (/*bass0 >= 450 ||*/
         bass1 >= 200 ||
@@ -384,14 +506,24 @@ void loop() {
         (x >= FREQ_OFFSET && v >= 100)) {
       
     digitalWrite(LED_BUILTIN, HIGH);
-    digitalWrite(LEDW, HIGH);
-    smills[PLW] = millis();
+    
+//    uint8_t res = addQueue(PLW);
+//    if(res > 0) digitalWrite(res, LOW);
+
+    uint32_t _m = millis();
+    LED_ON(PLW, _m)
+    
+//    digitalWrite(leds[PLW], HIGH);
+//    smills[PLW] = millis();
   } else {
-    emills[PLW] = millis();
-    if ((emills[PLW] - smills[PLW]) >= MIN_MILLSW) {
+    //emills[PLW] = millis();
+    uint32_t _m = millis();
+    
+    if (status_led[PLW] == HIGH && (_m - smills[PLW]) >= MIN_MILLSW_ON) {
       //digitalWrite(LED_BUILTIN, LOW);
       digitalWrite(LED_BUILTIN, LOW);
-      digitalWrite(LEDW, LOW);
+      LED_OFF(PLW, _m)
+//      digitalWrite(LEDW, LOW);
     }
   }
 
